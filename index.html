@@ -231,7 +231,7 @@ function loadFile(file){
   return new Promise((res, rej) => {
     const url = URL.createObjectURL(file), img = new Image();
     img.onload = () => {
-      const MAX = 2400, s = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
+      const MAX = 3200, s = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
       const c = newCanvas(Math.round(img.naturalWidth * s), Math.round(img.naturalHeight * s));
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
       URL.revokeObjectURL(url); res(c);
@@ -511,7 +511,7 @@ function warp(src, q){
   let W = Math.max(dist(q[0], q[1]), dist(q[3], q[2])), H = Math.max(dist(q[0], q[3]), dist(q[1], q[2]));
   const ratio = trueRatio(q, src.width, src.height);
   if (ratio){ const area = W * H; W = Math.sqrt(area * ratio); H = W / ratio; }
-  const cap = 2200 / Math.max(W, H); if (cap < 1){ W *= cap; H *= cap; }
+  const cap = 3000 / Math.max(W, H); if (cap < 1){ W *= cap; H *= cap; }
   W = Math.max(2, Math.round(W)); H = Math.max(2, Math.round(H));
   const dst = [[0,0],[W-1,0],[W-1,H-1],[0,H-1]], A = [], b = [];
   for (let i = 0; i < 4; i++){ const [u, v] = dst[i], { x, y } = q[i];
@@ -582,7 +582,7 @@ function straighten(c){
   }
   const ratio = Math.min(c.width, c.height) / Math.max(c.width, c.height), A4 = 210 / 297;
   if (Math.abs(ratio / A4 - 1) < .16){
-    const land = c.width > c.height, o = land ? newCanvas(2339, 1654) : newCanvas(1654, 2339), x = o.getContext('2d');
+    const land = c.width > c.height, o = land ? newCanvas(2970, 2100) : newCanvas(2100, 2970), x = o.getContext('2d');
     x.imageSmoothingQuality = 'high'; x.drawImage(c, 0, 0, o.width, o.height); c = o;
   }
   return c;
@@ -653,9 +653,52 @@ function whiten(c, strong){
   ox.putImageData(id, 0, 0);
   return out;
 }
+// Margins: a strip of table, a shadow or the edge of the sheet underneath often survives the
+// crop. Each side is checked in short segments; where the outer few percent hold a band that
+// runs along the side (many dark pixels in a column), that band is painted white.
+function cleanEdges(c){
+  const w = c.width, h = c.height, x = c.getContext('2d'), id = x.getImageData(0, 0, w, h), d = id.data;
+  // first, any non-white blot that starts at the page edge and stays in the margin zone
+  // (table, the stack underneath, a finger) is followed inward and wiped
+  { const n = w * h, seen = new Uint8Array(n), st = new Int32Array(n); let sp = 0;
+    const mx = w * .1, my = h * .08;
+    const ok = p => { const xx = p % w, yy = (p / w) | 0; if (xx > mx && xx < w - mx && yy > my && yy < h - my) return false;
+      const i = p * 4; return d[i]*.299 + d[i+1]*.587 + d[i+2]*.114 < 225; };
+    const push = p => { if (!seen[p] && ok(p)){ seen[p] = 1; st[sp++] = p; } };
+    for (let xx = 0; xx < w; xx++){ push(xx); push((h-1)*w + xx); }
+    for (let yy = 0; yy < h; yy++){ push(yy*w); push(yy*w + w-1); }
+    while (sp){ const p = st[--sp], xx = p % w; const i = p * 4; d[i] = d[i+1] = d[i+2] = 255;
+      if (xx > 0) push(p-1); if (xx < w-1) push(p+1); if (p >= w) push(p-w); if (p < n-w) push(p+w); } }
+  const dark = i => d[i]*.299 + d[i+1]*.587 + d[i+2]*.114 < 232;   // anything not paper-white
+  const white = (x0, y0, x1, y1) => { for (let y = y0; y < y1; y++) for (let xx = x0; xx < x1; xx++){ const i = (y*w + xx) * 4; d[i] = d[i+1] = d[i+2] = 255; } };
+  const SEG = 10, dx = Math.round(w * .05), dy = Math.round(h * .04);
+  for (let s = 0; s < SEG; s++){
+    const y0 = Math.floor(h * s / SEG), y1 = Math.floor(h * (s + 1) / SEG), x0 = Math.floor(w * s / SEG), x1 = Math.floor(w * (s + 1) / SEG);
+    for (const side of [0, 1]){
+      let cut = -1;
+      for (let k = 0; k < dx; k++){ const xx = side ? w - 1 - k : k; let n = 0, t = 0;
+        for (let y = y0; y < y1; y += 2){ t++; if (dark((y*w + xx) * 4)) n++; } if (n / t > .35) cut = k; }
+      if (cut >= 0){ const wd = Math.min(dx, cut + 3); side ? white(w - wd, y0, w, y1) : white(0, y0, wd, y1); }
+      cut = -1;
+      for (let k = 0; k < dy; k++){ const yy = side ? h - 1 - k : k; let n = 0, t = 0;
+        for (let xx = x0; xx < x1; xx += 2){ t++; if (dark((yy*w + xx) * 4)) n++; } if (n / t > .35) cut = k; }
+      if (cut >= 0){ const hd = Math.min(dy, cut + 3); side ? white(x0, h - hd, x1, h) : white(x0, 0, x1, hd); }
+    }
+  }
+  x.putImageData(id, 0, 0);
+}
+// unsharp mask on brightness: crisper letter edges, colours untouched
+function sharpen(c, amount){
+  const w = c.width, h = c.height, x = c.getContext('2d'), id = x.getImageData(0, 0, w, h), d = id.data, n = w * h;
+  const L = new Float32Array(n); for (let i = 0; i < n; i++) L[i] = d[i*4]*.299 + d[i*4+1]*.587 + d[i*4+2]*.114;
+  const B = boxBlur(L, w, h, 1);
+  for (let i = 0; i < n; i++){ const k = (L[i] - B[i]) * amount; if (k > -1 && k < 1) continue; const p = i * 4; d[p] += k; d[p+1] += k; d[p+2] += k; }
+  x.putImageData(id, 0, 0);
+}
 function filter(c, f){
   if (f === 'orig'){ const o = newCanvas(c.width, c.height); o.getContext('2d').drawImage(c, 0, 0); return o; }
   const out = whiten(c, f !== 'cinza');
+  cleanEdges(out); sharpen(out, .55);
   { // a thin white frame wipes slivers of table or of the sheets underneath left at the very edge
     const bw = Math.max(2, Math.round(Math.min(out.width, out.height) * .008)), x = out.getContext('2d');
     x.fillStyle = '#fff'; x.fillRect(0, 0, out.width, bw); x.fillRect(0, out.height - bw, out.width, bw); x.fillRect(0, 0, bw, out.height); x.fillRect(out.width - bw, 0, bw, out.height); }
@@ -939,7 +982,7 @@ async function maybeAutoName(){
 }
 try { if (localStorage.getItem('dig.align') === 'off'){ opt.align = 'off'; $('#segAlign').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x.dataset.v === 'off')); } } catch {}
 try { const v = localStorage.getItem('dig.auto'); if (v === 'off'){ opt.auto = 'off'; $('#segAuto').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x.dataset.v === 'off')); } } catch {}
-const Q = { leve: { q: .55, max: 1500 }, padrao: { q: .72, max: 2000 }, alta: { q: .9, max: 2400 } };
+const Q = { leve: { q: .55, max: 1600 }, padrao: { q: .7, max: 2600 }, alta: { q: .88, max: 3000 } };
 function cleanName(s){
   s = (s || '').trim().replace(/\.pdf$/i, '').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, '_');
   if (!s){ const d = new Date(), z = x => String(x).padStart(2, '0'); s = `Digitalizacao_${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}_${z(d.getHours())}h${z(d.getMinutes())}`; }

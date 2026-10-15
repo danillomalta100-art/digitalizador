@@ -1,6 +1,6 @@
 // Keeps the app working offline. Bump VERSION whenever any file changes,
 // so phones fetch the new version on their next visit.
-const VERSION = 'digitalizador-v3';
+const VERSION = 'digitalizador-v4';
 const FILES = ['./', 'index.html', 'jspdf.umd.min.js', 'ocr/tesseract.min.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {

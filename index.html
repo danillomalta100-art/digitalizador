@@ -566,6 +566,109 @@ function textAngle(c){
   let bestV = 0; for (let a = -6; a <= 6.001; a += .5) bestV = Math.max(bestV, sharp(a, true));
   return { angle: bestA, sideways: bestV > best * 1.6 };
 }
+/* ---------- page curl ----------
+   A sheet that is bowed or lifted makes the lines of text bend. Every long line of ink
+   (text line, rule, table border) is traced across the page; all of them together give a
+   smooth vertical displacement D(x, y). Each line is assumed to be straight in reality, so
+   the page is resampled at y + D(x, y) to lay it flat. */
+function dewarp(c){
+  const s = Math.min(1, 1000 / c.width), w = Math.round(c.width * s), h = Math.round(c.height * s);
+  const t = newCanvas(w, h), tx = t.getContext('2d', { willReadFrequently: true }); tx.drawImage(c, 0, 0, w, h);
+  const d = tx.getImageData(0, 0, w, h).data, n = w * h;
+  const g = new Float32Array(n); for (let i = 0; i < n; i++) g[i] = .299*d[i*4] + .587*d[i*4+1] + .114*d[i*4+2];
+  const bg = boxBlur(g, w, h, 15);
+  const ink = new Uint8Array(n); for (let i = 0; i < n; i++) ink[i] = g[i] < bg[i] - 28 ? 1 : 0;
+  // smear ink sideways so the words of one line join into a single long strip
+  const R = Math.round(w * .012), sm = new Uint8Array(n);
+  for (let y = 0; y < h; y++){ let last = -1e9;
+    for (let x = 0; x < w; x++){ if (ink[y*w+x]) last = x; if (x - last <= R) sm[y*w+x] = 1; }
+    last = 1e9; for (let x = w - 1; x >= 0; x--){ if (ink[y*w+x]) last = x; if (last - x <= R) sm[y*w+x] = 1; } }
+  // trace each strip: its centre height in 32 vertical bands
+  const NB = 32, lab = new Int32Array(n), st = new Int32Array(n), samples = [];
+  let cur = 0;
+  for (let i = 0; i < n; i++){
+    if (!sm[i] || lab[i]) continue;
+    cur++; let sp = 0, x0 = w, x1 = 0, y0 = h, y1 = 0; st[sp++] = i; lab[i] = cur; const pix = [];
+    while (sp){ const p = st[--sp], x = p % w, y = (p / w) | 0; pix.push(p);
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      if (x > 0 && sm[p-1] && !lab[p-1]){ lab[p-1] = cur; st[sp++] = p-1; }
+      if (x < w-1 && sm[p+1] && !lab[p+1]){ lab[p+1] = cur; st[sp++] = p+1; }
+      if (p >= w && sm[p-w] && !lab[p-w]){ lab[p-w] = cur; st[sp++] = p-w; }
+      if (p < n-w && sm[p+w] && !lab[p+w]){ lab[p+w] = cur; st[sp++] = p+w; } }
+    if (x1 - x0 < w * .22 || y1 - y0 > h * .05 || y1 - y0 < 2) continue;
+    const sy = new Float64Array(NB), sn = new Int32Array(NB);
+    for (const p of pix){ if (!ink[p]) continue; const b = Math.min(NB - 1, ((p % w) / w * NB) | 0); sy[b] += (p / w) | 0; sn[b]++; }
+    const line = [];
+    for (let b = 0; b < NB; b++) if (sn[b] >= 4) line.push({ x: (b + .5) / NB - .5, y: sy[b] / sn[b] / h - .5 });
+    if (line.length < 6) continue;
+    // printed lines are smooth; handwriting and stamps wobble. Keep only strips that follow
+    // their own gentle curve (quadratic) within a small margin
+    const M = [[0,0,0],[0,0,0],[0,0,0]], V = [0,0,0];
+    for (const p of line){ const r = [1, p.x, p.x * p.x]; for (let a = 0; a < 3; a++){ V[a] += r[a] * p.y; for (let b = 0; b < 3; b++) M[a][b] += r[a] * r[b]; } }
+    const qf = solve(M, V);
+    const wob = Math.sqrt(line.reduce((a, p) => a + (p.y - qf[0] - qf[1]*p.x - qf[2]*p.x*p.x) ** 2, 0) / line.length);
+    if (wob * h > 1.6) continue;
+    samples.push(line);
+  }
+  if (samples.length < 6) return c;
+  // least squares: y_obs = Y_k (each line's flat height) + sum a_mn x^m y^n, m = 1..3, n = 0..2
+  const terms = []; for (let m = 1; m <= 3; m++) for (let k = 0; k <= 2; k++) terms.push([m, k]);
+  const fit = (lines) => {
+    const K = lines.length, U = K + terms.length, A = Array.from({ length: U }, () => new Float64Array(U)), B = new Float64Array(U);
+    lines.forEach((line, k) => {
+      const ym = line.reduce((a, p) => a + p.y, 0) / line.length;
+      for (const p of line){
+        const row = new Float64Array(U); row[k] = 1;
+        terms.forEach(([m, e], j) => { row[K + j] = p.x ** m * ym ** e; });
+        for (let a = 0; a < U; a++){ if (!row[a]) continue; B[a] += row[a] * p.y; for (let b2 = 0; b2 < U; b2++) A[a][b2] += row[a] * row[b2]; }
+      }
+    });
+    for (let a = 0; a < U; a++) A[a][a] += 1e-9;
+    const sol = solve(A.map(r => Array.from(r)), Array.from(B));
+    return { coef: sol.slice(K), Y: sol.slice(0, K) };
+  };
+  let res = fit(samples);
+  // drop strips that disagree (a logo, a slanted signature) and fit again
+  const D = (x, y, coef) => terms.reduce((a, [m, e], j) => a + coef[j] * x ** m * y ** e, 0);
+  const err = samples.map((line, k) => { const ym = line.reduce((a, p) => a + p.y, 0) / line.length;
+    return line.reduce((a, p) => a + Math.abs(p.y - res.Y[k] - D(p.x, ym, res.coef)), 0) / line.length; });
+  const med = err.slice().sort((a, b) => a - b)[err.length >> 1] || 0;
+  const keep = samples.filter((_, k) => err[k] <= Math.max(med * 3, .0015));
+  if (keep.length >= 4 && keep.length < samples.length) res = fit(keep);
+  const coef = res.coef, used = keep.length >= 4 && keep.length < samples.length ? keep : samples;
+  // does the model really explain a bend? compare how far the lines stray from flat, before and after
+  let before = 0, after = 0, cnt = 0;
+  used.forEach(line => { const ym = line.reduce((a, p) => a + p.y, 0) / line.length;
+    let off = 0; for (const p of line) off += p.y - D(p.x, ym, coef); off /= line.length;
+    for (const p of line){ before += (p.y - ym) ** 2; after += (p.y - off - D(p.x, ym, coef)) ** 2; cnt++; } });
+  before = Math.sqrt(before / cnt) * c.height; after = Math.sqrt(after / cnt) * c.height;
+  if (window.__dbgOn) window.__dewarpGain = { before: +before.toFixed(1), after: +after.toFixed(1) };
+  if (before < c.height * .0013 || after > before * .45) return c;
+  // how much it would move things; skip when the page is already flat or the fit is implausible
+  let maxD = 0, minD = 0;
+  for (let gy = -.45; gy <= .45; gy += .05) for (let gx = -.5; gx <= .5; gx += .05){ const v = D(gx, gy, coef) - D(0, gy, coef); if (v > maxD) maxD = v; if (v < minD) minD = v; }
+  const span = maxD - minD;
+  if (window.__dbgOn) window.__dewarpInfo = { lines: samples.length, kept: keep.length, span: +(span * c.height).toFixed(1) };
+  if (span < .0025 || span > .08) return c;
+  // resample full size: for each column, D is a quadratic in y (D is zero on the centre column)
+  const W = c.width, H = c.height, src = c.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
+  const out = newCanvas(W, H), oc = out.getContext('2d'), od = oc.createImageData(W, H), o = od.data;
+  for (let x = 0; x < W; x++){
+    const xn = x / W - .5;
+    const q = [0, 0, 0];
+    terms.forEach(([m, e], j) => { q[e] += coef[j] * xn ** m; });
+    for (let y = 0; y < H; y++){
+      const yn = y / H - .5, dy = (q[0] + q[1] * yn + q[2] * yn * yn) * H;
+      let sy = y + dy; const oi = (y * W + x) * 4;
+      if (sy < 0 || sy > H - 1.001){ o[oi] = o[oi+1] = o[oi+2] = 255; o[oi+3] = 255; continue; }
+      const y0 = sy | 0, fy = sy - y0, i0 = (y0 * W + x) * 4, i1 = i0 + W * 4;
+      o[oi] = src[i0] + (src[i1] - src[i0]) * fy; o[oi+1] = src[i0+1] + (src[i1+1] - src[i0+1]) * fy; o[oi+2] = src[i0+2] + (src[i1+2] - src[i0+2]) * fy; o[oi+3] = 255;
+    }
+  }
+  oc.putImageData(od, 0, 0);
+  return out;
+}
+if (window.__dbgOn) window.__dewarp = dewarp;
 function straighten(c){
   if (opt.align !== 'on') return c;
   const r = textAngle(c);
@@ -580,6 +683,7 @@ function straighten(c){
     x.imageSmoothingQuality = 'high'; x.drawImage(c, -c.width / 2, -c.height / 2);
     c = o;
   }
+  c = dewarp(c);
   const ratio = Math.min(c.width, c.height) / Math.max(c.width, c.height), A4 = 210 / 297;
   if (Math.abs(ratio / A4 - 1) < .16){
     const land = c.width > c.height, o = land ? newCanvas(2970, 2100) : newCanvas(2100, 2970), x = o.getContext('2d');

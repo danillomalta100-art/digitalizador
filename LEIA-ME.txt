@@ -1,4 +1,4 @@
-DIGITALIZADOR PROCON MINEIROS - como publicar
+DIGITALIZADOR - como publicar
 
 1. Crie uma conta gratuita em https://github.com (Sign up).
 2. Clique em "+" (canto superior direito) > "New repository".

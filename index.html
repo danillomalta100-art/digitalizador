@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Digitalizador Procon</title>
-<meta name="description" content="Escâner de documentos do Procon Mineiros: fotografa, recorta, clareia e salva em PDF no próprio celular.">
+<title>Digitalizador</title>
+<meta name="description" content="Escâner de documentos: fotografa, recorta, clareia e salva em PDF no próprio celular.">
 <meta name="theme-color" content="#16202b">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png" type="image/png">
@@ -122,7 +122,7 @@ details.more[open] summary{margin-bottom:10px}
 <!-- ================= HOME ================= -->
 <section id="home" class="view">
   <header class="bar pad">
-    <div class="brand"><div class="lamp" aria-hidden="true"></div><div><b>Digitalizador</b><small>Procon Mineiros · uso interno</small></div></div>
+    <div class="brand"><div class="lamp" aria-hidden="true"></div><div><b>Digitalizador</b><small>Escâner de documentos</small></div></div>
     <span class="count" id="count">0 páginas</span>
   </header>
   <main class="work pad" id="work">
@@ -155,7 +155,7 @@ details.more[open] summary{margin-bottom:10px}
         </div>
       </details>
       <div class="row" style="margin-top:10px;align-items:flex-end">
-        <label class="field" style="flex:2 1 0">Nome do arquivo<input id="fname" type="text" autocomplete="off" placeholder="Ex.: Reclamacao_2026_0123_RG"></label>
+        <label class="field" style="flex:2 1 0">Nome do arquivo<input id="fname" type="text" autocomplete="off" placeholder="Ex.: Contrato_aluguel_2026"></label>
         <button class="primary" id="pdfBtn" type="button" style="flex:1 1 0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4M12 11v6m-3-3 3 3 3-3"/></svg>Baixar PDF</button>
         <button id="shareBtn" type="button" hidden aria-label="Enviar PDF" style="flex:0 0 auto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.2 10.8 7.6-4.4M8.2 13.2l7.6 4.4"/></svg>Enviar</button>
       </div>
@@ -889,7 +889,7 @@ async function makePdf(){
     doc.addImage(c.toDataURL('image/jpeg', p.filter === 'pb' ? Math.min(cfg.q, .6) : cfg.q), 'JPEG', (pw - iw) / 2, (ph - ih) / 2, iw, ih, undefined, 'FAST');
   }
   const name = cleanName($('#fname').value);
-  doc.setProperties({ title: name.replace(/\.pdf$/, ''), creator: 'Digitalizador Procon Mineiros' });
+  doc.setProperties({ title: name.replace(/\.pdf$/, ''), creator: 'Digitalizador' });
   const blob = doc.output('blob'), kb = blob.size / 1024;
   return { blob, name, size: kb > 1024 ? (kb/1024).toFixed(1).replace('.', ',') + ' MB' : Math.round(kb) + ' KB' };
 }
@@ -923,8 +923,8 @@ $('#sampleBtn').onclick = async () => {
   for (let i = 0; i < 60; i++){ x.strokeStyle = `rgba(0,0,0,${.04 + Math.random()*.06})`; x.lineWidth = 2 + Math.random()*4; x.beginPath(); const y = Math.random()*1200; x.moveTo(0, y); x.bezierCurveTo(500, y + 30, 1100, y - 30, 1600, y + 10); x.stroke(); }
   x.save(); x.translate(800, 610); x.rotate(-.12); x.transform(1, .03, -.06, .92, 0, 0);
   x.shadowColor = 'rgba(0,0,0,.45)'; x.shadowBlur = 30; x.fillStyle = '#ece4cf'; x.fillRect(-380, -520, 760, 1040); x.shadowBlur = 0;
-  x.fillStyle = '#1d2a55'; x.font = 'bold 30px sans-serif'; x.fillText('PROCON MINEIROS', -320, -440);
-  x.font = '22px sans-serif'; x.fillText('Termo de Audiência de Conciliação (exemplo)', -320, -400);
+  x.fillStyle = '#1d2a55'; x.font = 'bold 30px sans-serif'; x.fillText('DECLARAÇÃO', -320, -440);
+  x.font = '22px sans-serif'; x.fillText('Documento de exemplo para teste', -320, -400);
   x.fillStyle = '#3a3a3a'; for (let i = 0; i < 26; i++){ const w = 520 + Math.random()*120 - (i % 6 === 5 ? 260 : 0); x.fillRect(-320, -340 + i*30, w, 9); }
   x.strokeStyle = '#1d3fa8'; x.lineWidth = 3; x.beginPath(); x.moveTo(-320, 455); x.bezierCurveTo(-260, 400, -200, 500, -120, 440); x.stroke();
   x.fillStyle = '#333'; x.fillRect(-320, 470, 220, 2); x.fillRect(100, 470, 220, 2); x.restore();

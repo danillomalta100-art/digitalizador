@@ -1,0 +1,27 @@
+DIGITALIZADOR PROCON MINEIROS - como publicar
+
+1. Crie uma conta gratuita em https://github.com (Sign up).
+2. Clique em "+" (canto superior direito) > "New repository".
+   - Repository name: digitalizador
+   - Marque "Public"
+   - Clique em "Create repository".
+3. Na página do repositório, clique no link "uploading an existing file".
+4. Arraste TODOS os arquivos desta pasta (não a pasta em si) para a área indicada.
+   Clique em "Commit changes" e aguarde terminar.
+5. Vá em "Settings" > "Pages" (menu da esquerda).
+   - Source: "Deploy from a branch"
+   - Branch: "main" e pasta "/ (root)" > Save.
+6. Aguarde 1 a 2 minutos e atualize a página. Aparecerá o endereço:
+   https://SEU-USUARIO.github.io/digitalizador/
+
+INSTALAR NO CELULAR
+- Android (Chrome): abra o endereço > menu (3 pontinhos) > "Instalar app"
+  (ou "Adicionar à tela inicial").
+- iPhone (Safari): abra o endereço > botão Compartilhar > "Adicionar à Tela de Início".
+
+Para os colegas: basta enviar o endereço e eles seguem o passo "Instalar no celular".
+
+ATUALIZAÇÕES
+Quando houver versão nova, repita os passos 3 e 4 enviando os arquivos novos
+(o GitHub substitui os antigos). Os celulares atualizam sozinhos ao abrir o app
+com internet (pode ser preciso abrir duas vezes).

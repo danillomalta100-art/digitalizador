@@ -139,7 +139,7 @@ details.more[open] summary{margin-bottom:10px}
       <button id="sampleBtn" class="ghost" type="button">Testar com uma foto de exemplo</button>
     </div>
     <div class="grid" id="grid"></div>
-    <div class="note" id="privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Tudo é processado neste celular. Nenhuma imagem é enviada para a internet. As páginas somem ao fechar o app, então salve o PDF antes. <b id="appVersion">Versão 7</b></span></div>
+    <div class="note" id="privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Tudo é processado neste celular. Nenhuma imagem é enviada para a internet. As páginas somem ao fechar o app, então salve o PDF antes. <b id="appVersion">Versão 8</b></span></div>
   </main>
   <footer class="actions pad">
     <div class="row">
@@ -857,6 +857,69 @@ function sharpen(c, amount){
   x.putImageData(id, 0, 0);
 }
 if (window.__dbgOn) setTimeout(() => { window.__filter = filter; });
+// Does the page carry any real colour (logo, stamp, pen)? Counted on a reduced copy: pixels of
+// mid brightness whose chroma stands clearly out. Below a tiny share the page is treated as
+// black-and-white print, and shown in neutral grey so colour casts from shadows disappear.
+function hasColour(c){
+  const s = Math.min(1, 900 / Math.max(c.width, c.height)), w = Math.round(c.width * s), h = Math.round(c.height * s);
+  const t = newCanvas(w, h), x = t.getContext('2d', { willReadFrequently: true }); x.drawImage(c, 0, 0, w, h);
+  const d = x.getImageData(0, 0, w, h).data; let n = 0;
+  for (let i = 0; i < d.length; i += 4){
+    const r = d[i], g = d[i+1], b = d[i+2], y = .299*r + .587*g + .114*b;
+    if (y < 35 || y > 215) continue;
+    const cb = -.169*r - .331*g + .5*b, cr = .5*r - .419*g - .081*b;
+    if (cb * cb + cr * cr > 15 * 15) n++;
+  }
+  return n / (w * h) > .0004;
+}
+// Sharpness of the photo (variance of the Laplacian on a reduced copy): low values mean a
+// shaken or out-of-focus shot
+function sharpness(c){
+  const s = Math.min(1, 1000 / Math.max(c.width, c.height)), w = Math.round(c.width * s), h = Math.round(c.height * s);
+  const t = newCanvas(w, h), x = t.getContext('2d', { willReadFrequently: true }); x.drawImage(c, 0, 0, w, h);
+  const d = x.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) g[i] = .299*d[i*4] + .587*d[i*4+1] + .114*d[i*4+2];
+  // strongest edges relative to the page's own contrast, so faint or nearly blank pages are not
+  // mistaken for blur; returns null when there is too little print to judge
+  const hist = new Uint32Array(256); for (let i = 0; i < w * h; i++) hist[Math.min(255, g[i] | 0)]++;
+  const pct = q => { let a = 0; for (let v = 0; v < 256; v++){ a += hist[v]; if (a >= w * h * q) return v; } return 255; };
+  const contrast = pct(.995) - pct(.01);
+  if (contrast < 70) return null;
+  const lap = [];
+  for (let y = 1; y < h - 1; y += 1) for (let xx = 1; xx < w - 1; xx++){ const i = y*w + xx; lap.push(Math.abs(4*g[i] - g[i-1] - g[i+1] - g[i-w] - g[i+w])); }
+  lap.sort((a, b) => a - b);
+  return lap[Math.floor(lap.length * .998)] / contrast;
+}
+if (window.__dbgOn) setTimeout(() => { window.__sharpness = sharpness; window.__hasColour = hasColour; });
+// Black and white in the way archive scanners do it: Sauvola's local threshold on the
+// already flattened page (threshold = local mean * (1 + k * (local deviation / 128 - 1))),
+// then isolated specks of noise smaller than a printed dot are removed.
+function toBlackWhite(d, L, w, h){
+  const n = w * h, f = 2, sw = Math.ceil(w / f), sh = Math.ceil(h / f);
+  const a = new Float32Array(sw * sh), a2 = new Float32Array(sw * sh), cnt = new Float32Array(sw * sh);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++){ const k = ((y / f) | 0) * sw + ((x / f) | 0), v = L[y*w+x]; a[k] += v; a2[k] += v * v; cnt[k]++; }
+  for (let k = 0; k < a.length; k++){ a[k] /= cnt[k]; a2[k] /= cnt[k]; }
+  const r = Math.max(8, Math.round(Math.max(sw, sh) / 20));
+  const m = boxBlur(a, sw, sh, r), m2 = boxBlur(a2, sw, sh, r);
+  const ink = new Uint8Array(n);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++){
+    const k = ((y / f) | 0) * sw + ((x / f) | 0), mean = m[k], sd = Math.sqrt(Math.max(0, m2[k] - mean * mean));
+    const t = mean * (1 + .25 * (sd / 128 - 1)), i = y*w + x;
+    ink[i] = L[i] < t ? 1 : 0;
+  }
+  // despeckle: black specks smaller than a full stop at this resolution
+  const minArea = Math.max(2, Math.round(12 * (Math.max(w, h) / 3508) ** 2));
+  const seen = new Uint8Array(n), st = new Int32Array(n), small = [];
+  for (let i = 0; i < n; i++){
+    if (!ink[i] || seen[i]) continue;
+    let sp = 0, area = 0; st[sp++] = i; seen[i] = 1; small.length = 0;
+    while (sp){ const p = st[--sp], x = p % w; area++; if (area <= minArea) small.push(p);
+      const nb = [x > 0 ? p-1 : -1, x < w-1 ? p+1 : -1, p >= w ? p-w : -1, p < n-w ? p+w : -1, p >= w && x > 0 ? p-w-1 : -1, p >= w && x < w-1 ? p-w+1 : -1, p < n-w && x > 0 ? p+w-1 : -1, p < n-w && x < w-1 ? p+w+1 : -1];
+      for (const q of nb) if (q >= 0 && ink[q] && !seen[q]){ seen[q] = 1; st[sp++] = q; } }
+    if (area <= minArea) for (const p of small) ink[p] = 0;
+  }
+  for (let i = 0; i < n; i++){ const v = ink[i] ? 0 : 255; d[i*4] = d[i*4+1] = d[i*4+2] = v; }
+}
 function filter(c, f){
   if (f === 'orig'){ const o = newCanvas(c.width, c.height); o.getContext('2d').drawImage(c, 0, 0); return o; }
   const out = whiten(c, f !== 'cinza');
@@ -864,25 +927,12 @@ function filter(c, f){
   { // a thin white frame wipes slivers of table or of the sheets underneath left at the very edge
     const bw = Math.max(2, Math.round(Math.min(out.width, out.height) * .008)), x = out.getContext('2d');
     x.fillStyle = '#fff'; x.fillRect(0, 0, out.width, bw); x.fillRect(0, out.height - bw, out.width, bw); x.fillRect(0, 0, bw, out.height); x.fillRect(out.width - bw, 0, bw, out.height); }
-  if (f === 'auto') return out;
+  if (f === 'auto' && hasColour(out)) return out;
   const w = out.width, h = out.height, ox = out.getContext('2d'), id = ox.getImageData(0, 0, w, h), d = id.data, n = w * h;
   const L = new Uint8ClampedArray(n);
   for (let i = 0; i < n; i++) L[i] = .299*d[i*4] + .587*d[i*4+1] + .114*d[i*4+2];
-  if (f === 'cinza'){ for (let i = 0; i < n; i++) d[i*4] = d[i*4+1] = d[i*4+2] = L[i]; }
-  else { // pb: local threshold on the already whitened page
-    const W1 = w + 1, I = new Uint32Array(W1 * (h + 1));
-    for (let y = 0; y < h; y++){ let row = 0; for (let x = 0; x < w; x++){ row += L[y*w+x]; I[(y+1)*W1 + x+1] = I[y*W1 + x+1] + row; } }
-    const r = Math.max(8, Math.round(Math.min(w, h) / 30));
-    for (let y = 0; y < h; y++){
-      const y0 = Math.max(0, y - r), y1 = Math.min(h, y + r + 1);
-      for (let x = 0; x < w; x++){
-        const x0 = Math.max(0, x - r), x1 = Math.min(w, x + r + 1);
-        const mean = (I[y1*W1+x1] - I[y0*W1+x1] - I[y1*W1+x0] + I[y0*W1+x0]) / ((x1-x0)*(y1-y0));
-        const i = y*w + x, v = L[i] < Math.min(mean * .9, 205) ? 0 : 255;
-        d[i*4] = d[i*4+1] = d[i*4+2] = v;
-      }
-    }
-  }
+  if (f === 'pb') toBlackWhite(d, L, w, h);
+  else for (let i = 0; i < n; i++) d[i*4] = d[i*4+1] = d[i*4+2] = L[i];   // grey (and colourless 'auto' pages)
   ox.putImageData(id, 0, 0);
   return out;
 }
@@ -968,7 +1018,8 @@ $('#cropOk').onclick = async () => {
 
 /* ---------- finish ---------- */
 function openFinish(){
-  show('finish'); $('#finOk').textContent = pages.includes(ed.page) ? 'Salvar alterações' : 'Adicionar página';
+  show('finish');
+  if (ed.warped){ const sh = sharpness(ed.warped); if (sh !== null && sh < .5) toast('A foto parece tremida ou fora de foco. Se o texto ficar difícil de ler, fotografe de novo com o celular parado.', 6000); } $('#finOk').textContent = pages.includes(ed.page) ? 'Salvar alterações' : 'Adicionar página';
   renderFinish();
 }
 async function processed(){

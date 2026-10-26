@@ -139,7 +139,7 @@ details.more[open] summary{margin-bottom:10px}
       <button id="sampleBtn" class="ghost" type="button">Testar com uma foto de exemplo</button>
     </div>
     <div class="grid" id="grid"></div>
-    <div class="note" id="privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Tudo é processado neste celular. Nenhuma imagem é enviada para a internet. As páginas somem ao fechar o app, então salve o PDF antes. <b id="appVersion">Versão 6</b></span></div>
+    <div class="note" id="privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Tudo é processado neste celular. Nenhuma imagem é enviada para a internet. As páginas somem ao fechar o app, então salve o PDF antes. <b id="appVersion">Versão 7</b></span></div>
   </main>
   <footer class="actions pad">
     <div class="row">
@@ -713,18 +713,68 @@ function maxFilter(a, w, h, r){
     for (let yy = y0; yy <= y1; yy++){ const v = t[yy*w+x]; if (v > m) m = v; } o[y*w+x] = m; }
   return o;
 }
+function minFilter(a, w, h, r){
+  const t = new Float32Array(a.length), o = new Float32Array(a.length);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++){ let m = 1e9;
+    const x0 = Math.max(0, x - r), x1 = Math.min(w - 1, x + r);
+    for (let xx = x0; xx <= x1; xx++){ const v = a[y*w+xx]; if (v < m) m = v; } t[y*w+x] = m; }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++){ let m = 1e9;
+    const y0 = Math.max(0, y - r), y1 = Math.min(h - 1, y + r);
+    for (let yy = y0; yy <= y1; yy++){ const v = t[yy*w+x]; if (v < m) m = v; } o[y*w+x] = m; }
+  return o;
+}
+// fills the unknown cells of a grid from the known ones around them (pull-push): known cells
+// are averaged into coarser grids, then the coarse answer flows back into the holes
+function pullPush(val, known, w, h){
+  const lv = [{ A: Float32Array.from(val, (v, i) => known[i] ? v : 0), Q: Float32Array.from(known), w, h }];
+  while (lv[lv.length-1].w > 2 || lv[lv.length-1].h > 2){
+    const P = lv[lv.length-1], nw = Math.ceil(P.w / 2), nh = Math.ceil(P.h / 2), A = new Float32Array(nw*nh), Q = new Float32Array(nw*nh);
+    for (let y = 0; y < P.h; y++) for (let x = 0; x < P.w; x++){ const i = y*P.w + x, k = (y >> 1)*nw + (x >> 1); A[k] += P.A[i] * P.Q[i]; Q[k] += P.Q[i]; }
+    for (let k = 0; k < A.length; k++){ A[k] = Q[k] > 0 ? A[k] / Q[k] : 0; Q[k] = Math.min(1, Q[k]); }
+    lv.push({ A, Q, w: nw, h: nh });
+  }
+  let F = lv[lv.length-1].A;
+  for (let l = lv.length - 2; l >= 0; l--){
+    const L = lv[l], C = lv[l+1], out = new Float32Array(L.w * L.h);
+    for (let y = 0; y < L.h; y++){ const cy = Math.min(C.h - 1, Math.max(0, (y - .5) / 2)), y0 = Math.min(C.h - 1, cy | 0), y1 = Math.min(C.h - 1, y0 + 1), ty = cy - y0;
+      for (let x = 0; x < L.w; x++){ const cx = Math.min(C.w - 1, Math.max(0, (x - .5) / 2)), x0 = Math.min(C.w - 1, cx | 0), x1 = Math.min(C.w - 1, x0 + 1), tx = cx - x0;
+        const cv = (F[y0*C.w+x0] * (1-tx) + F[y0*C.w+x1] * tx) * (1-ty) + (F[y1*C.w+x0] * (1-tx) + F[y1*C.w+x1] * tx) * ty;
+        const i = y*L.w + x; out[i] = L.Q[i] * L.A[i] + (1 - L.Q[i]) * cv; } }
+    F = out;
+  }
+  return F;
+}
+// The light falling on the paper, per colour channel, on a coarse grid.
+// 1. block maximum: thin strokes vanish, the paper's own light remains
+// 2. morphological closing (max then min filter): wipes out bolder text and lines but, unlike a
+//    plain max filter, keeps the outline of a shadow exactly where it is, so no grey band forms
+//    along a shadow's edge
+// 3. what is still very dark after that (logos, photos, filled boxes) is content, not light:
+//    those cells are filled in from the paper around them
+function paperLight(d, w, h){
+  const f = Math.max(1, Math.round(Math.max(w, h) / 600)), sw = Math.ceil(w / f), sh = Math.ceil(h / f), n = sw * sh;
+  const chs = [0, 1, 2].map(() => new Float32Array(n));
+  for (let y = 0; y < h; y++){ const row = ((y / f) | 0) * sw;
+    for (let x = 0; x < w; x++){ const si = row + ((x / f) | 0), p = (y*w + x) * 4;
+      for (let c = 0; c < 3; c++){ const v = d[p+c]; if (v > chs[c][si]) chs[c][si] = v; } } }
+  const r = Math.max(3, Math.round(Math.min(sw, sh) / 70));
+  const closed = chs.map(a => minFilter(maxFilter(a, sw, sh, r), sw, sh, r));
+  const L = new Float32Array(n); for (let i = 0; i < n; i++) L[i] = closed[0][i]*.299 + closed[1][i]*.587 + closed[2][i]*.114;
+  const sorted = Float32Array.from(L).sort(), ref = sorted[Math.floor(n * .9)] || 255;
+  // content test: much darker than the paper, or a strong colour (a logo) that paper light never has
+  const known = new Uint8Array(n);
+  for (let i = 0; i < n; i++){
+    const mx = Math.max(closed[0][i], closed[1][i], closed[2][i]), mn = Math.min(closed[0][i], closed[1][i], closed[2][i]);
+    known[i] = L[i] > ref * .3 && (mx - mn) < Math.max(40, mx * .35) ? 1 : 0;
+  }
+  const bgs = closed.map(a => { const filled = pullPush(a, known, sw, sh); return boxBlur(boxBlur(filled, sw, sh, 1), sw, sh, 1); });
+  return { bgs, f, sw, sh };
+}
 function whiten(c, strong){
   const w = c.width, h = c.height, out = newCanvas(w, h), ox = out.getContext('2d');
   ox.drawImage(c, 0, 0);
   const id = ox.getImageData(0, 0, w, h), d = id.data;
-  const f = Math.max(1, Math.round(Math.max(w, h) / 500)), sw = Math.ceil(w / f), sh = Math.ceil(h / f);
-  const r = Math.max(3, Math.round(Math.min(sw, sh) / 40));
-  const bgs = [];
-  for (let ch = 0; ch < 3; ch++){
-    const s = new Float32Array(sw * sh);
-    for (let y = 0; y < h; y++){ const sy = (y / f) | 0; for (let x = 0; x < w; x++){ const si = sy*sw + ((x / f) | 0), v = d[(y*w+x)*4+ch]; if (v > s[si]) s[si] = v; } }
-    bgs.push(boxBlur(boxBlur(maxFilter(s, sw, sh, r), sw, sh, r * 2), sw, sh, r));
-  }
+  const { bgs, f, sw, sh } = paperLight(d, w, h);
   for (let y = 0; y < h; y++){
     const fy = Math.min(sh - 1.001, Math.max(0, (y + .5) / f - .5)), y0 = fy | 0, ty = fy - y0;
     for (let x = 0; x < w; x++){
@@ -742,12 +792,19 @@ function whiten(c, strong){
   for (let i = 0; i < n; i++) hist[(d[i*4] + d[i*4+1] + d[i*4+2]) / 3 | 0]++;
   let bp = 0, acc = 0; for (; bp < 255; bp++){ acc += hist[bp]; if (acc > n * .015) break; }
   bp = Math.min(bp, 110);
-  const lut = new Uint8ClampedArray(256);
-  for (let v = 0; v < 256; v++){ let t = Math.max(0, (v - bp) / (250 - bp)); t = Math.min(1, t); lut[v] = 255 * Math.pow(t, 1.35); }
+  // two tone curves: grey pixels get a white point below 255, so paper grain and leftovers of
+  // light turn clean white; coloured pixels (stamps, pen, logos) keep a gentler curve so pale
+  // ink does not fade away
+  const lut = new Uint8ClampedArray(256), lutC = new Uint8ClampedArray(256);
+  for (let v = 0; v < 256; v++){
+    const t = Math.min(1, Math.max(0, (v - bp) / (236 - bp))), tc = Math.min(1, Math.max(0, (v - bp) / (252 - bp)));
+    lut[v] = 255 * Math.pow(t, 1.3); lutC[v] = 255 * Math.pow(tc, 1.15);
+  }
   for (let i = 0; i < n; i++){
-    const p = i * 4; let r0 = lut[d[p]], g0 = lut[d[p+1]], b0 = lut[d[p+2]];
+    const p = i * 4, sat0 = Math.max(d[p], d[p+1], d[p+2]) - Math.min(d[p], d[p+1], d[p+2]), k = Math.min(1, Math.max(0, (sat0 - 18) / 30));
+    let r0 = lut[d[p]] * (1 - k) + lutC[d[p]] * k, g0 = lut[d[p+1]] * (1 - k) + lutC[d[p+1]] * k, b0 = lut[d[p+2]] * (1 - k) + lutC[d[p+2]] * k;
     const m = (r0 + g0 + b0) / 3;
-    if (m > 238){ d[p] = d[p+1] = d[p+2] = 255; continue; }
+    if (m > 238 && k < .5){ d[p] = d[p+1] = d[p+2] = 255; continue; }
     // show-through from the back of the sheet: pale and colourless, so it fades to paper;
     // black ink, blue pen and stamps (saturated) are left alone
     if (strong && m > 165){ const sat = Math.max(r0, g0, b0) - Math.min(r0, g0, b0);
@@ -799,6 +856,7 @@ function sharpen(c, amount){
   for (let i = 0; i < n; i++){ const k = (L[i] - B[i]) * amount; if (k > -1 && k < 1) continue; const p = i * 4; d[p] += k; d[p+1] += k; d[p+2] += k; }
   x.putImageData(id, 0, 0);
 }
+if (window.__dbgOn) setTimeout(() => { window.__filter = filter; });
 function filter(c, f){
   if (f === 'orig'){ const o = newCanvas(c.width, c.height); o.getContext('2d').drawImage(c, 0, 0); return o; }
   const out = whiten(c, f !== 'cinza');
